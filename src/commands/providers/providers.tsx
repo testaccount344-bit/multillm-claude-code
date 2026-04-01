@@ -31,7 +31,7 @@ function getConnectedProviders(): { provider: ProviderConfig; connected: boolean
 
   return PROVIDERS.map(p => {
     // Check if any of this provider's env vars are set
-    const primaryEnvVar = p.envVars[0]?.name
+    const primaryEnvVar = p.envVars?.[0]?.name
     const connected = primaryEnvVar ? !!env[primaryEnvVar] : false
     return { provider: p, connected, envKey: primaryEnvVar }
   }).filter(x => x.connected)
