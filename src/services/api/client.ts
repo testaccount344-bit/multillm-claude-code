@@ -28,6 +28,12 @@ import {
   getVertexRegionForModel,
   isEnvTruthy,
 } from '../../utils/envUtils.js'
+import {
+  isCodexConnected,
+  getCodexAccessToken,
+  getCodexAccountId,
+  createCodexFetch,
+} from './codex.js'
 
 /**
  * Environment variables for different client types:
@@ -299,7 +305,12 @@ export async function getAnthropicClient({
 
   // Determine authentication method based on available tokens
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-    apiKey: isClaudeAISubscriber() ? null : apiKey || getAnthropicApiKey(),
+    // When Codex OAuth is connected, use a dummy API key (auth is via fetch override)
+    apiKey: isCodexConnected()
+      ? 'codex-oauth-dummy'
+      : isClaudeAISubscriber()
+        ? null
+        : apiKey || getAnthropicApiKey(),
     authToken: isClaudeAISubscriber()
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
@@ -361,6 +372,14 @@ function buildFetch(
 ): ClientOptions['fetch'] {
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
   const inner = fetchOverride ?? globalThis.fetch
+
+  // If Codex OAuth is connected, route through Codex backend
+  if (isCodexConnected()) {
+    logForDebugging('[API:provider] Using ChatGPT Codex backend')
+    const codexFetch = createCodexFetch(inner)
+    return codexFetch
+  }
+
   // Only send to the first-party API — Bedrock/Vertex/Foundry don't log it
   // and unknown headers risk rejection by strict proxies (inc-4029 class).
   const injectClientRequestId =

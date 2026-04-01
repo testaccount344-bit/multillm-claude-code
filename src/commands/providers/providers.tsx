@@ -30,9 +30,29 @@ function getConnectedProviders(): { provider: ProviderConfig; connected: boolean
   const env = config.env || {}
 
   return PROVIDERS.map(p => {
-    // Check if any of this provider's env vars are set
-    const primaryEnvVar = p.envVars?.[0]?.name
-    const connected = primaryEnvVar ? !!env[primaryEnvVar] : false
+    // Check direct env vars first
+    let primaryEnvVar = p.envVars?.[0]?.name
+    let connected = primaryEnvVar ? !!env[primaryEnvVar] : false
+
+    // If not connected, check authOptions env vars (e.g. OpenAI Codex OAuth)
+    if (!connected && p.authOptions) {
+      for (const option of p.authOptions) {
+        if (option.oauth) {
+          // Check OAuth token env var
+          if (env[option.oauth.tokenEnvVar]) {
+            connected = true
+            primaryEnvVar = option.oauth.tokenEnvVar
+            break
+          }
+        }
+        if (option.envVars?.[0]?.name && env[option.envVars[0].name]) {
+          connected = true
+          primaryEnvVar = option.envVars[0].name
+          break
+        }
+      }
+    }
+
     return { provider: p, connected, envKey: primaryEnvVar }
   }).filter(x => x.connected)
 }
