@@ -207,6 +207,18 @@ export function createCodexFetch(originalFetch: typeof fetch): typeof fetch {
     if (init?.body) {
       try {
         const body = JSON.parse(init.body as string)
+
+        // Map model names from external provider format
+        // ext/openai-codex/gpt-5.2-codex -> gpt-5.2-codex
+        if (body.model && typeof body.model === 'string') {
+          if (body.model.startsWith('ext/openai-codex/')) {
+            body.model = body.model.replace('ext/openai-codex/', '')
+          } else if (body.model.startsWith('ext/')) {
+            // Strip ext/ prefix for other providers too
+            body.model = body.model.replace(/^ext\/[^\/]+\//, '')
+          }
+        }
+
         transformedBody = JSON.stringify(transformRequestBody(body))
       } catch {
         // Pass through if we can't parse

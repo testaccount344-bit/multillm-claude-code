@@ -35,6 +35,11 @@ export async function validateModel(
     }
   }
 
+  // Check if it's an external provider model (ext/provider/model-id)
+  if (normalizedModel.startsWith('ext/')) {
+    return { valid: true }
+  }
+
   // Check if it's a known alias (these are always valid)
   const lowerModel = normalizedModel.toLowerCase()
   if ((MODEL_ALIASES as readonly string[]).includes(lowerModel)) {

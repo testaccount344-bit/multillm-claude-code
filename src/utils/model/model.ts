@@ -554,6 +554,17 @@ export function isLegacyModelRemapEnabled(): boolean {
 }
 
 export function modelDisplayString(model: ModelSetting): string {
+  // Handle external provider models
+  if (model && typeof model === 'string' && model.startsWith('ext/')) {
+    const parts = model.split('/')
+    if (parts.length >= 3) {
+      const providerId = parts[1]
+      const modelId = parts.slice(2).join('/')
+      return `${modelId} (${providerId})`
+    }
+    return model
+  }
+
   if (model === null) {
     if (process.env.USER_TYPE === 'ant') {
       return `Default for Ants (${renderDefaultModelSetting(getDefaultMainLoopModelSetting())})`

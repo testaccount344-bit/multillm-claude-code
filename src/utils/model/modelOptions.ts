@@ -32,6 +32,7 @@ import {
 } from './model.js'
 import { has1mContext } from '../context.js'
 import { getGlobalConfig } from '../config.js'
+import { getConnectedModels, type UnifiedModel } from './registry.js'
 
 // @[MODEL LAUNCH]: Update all the available and default model option strings below.
 
@@ -458,8 +459,53 @@ function getKnownModelOption(model: string): ModelOption | null {
   }
 }
 
+/**
+ * Get model options from connected external providers (OpenAI, Google, etc.)
+ */
+function getExternalProviderModelOptions(): ModelOption[] {
+  const connectedModels = getConnectedModels()
+  const options: ModelOption[] = []
+
+  for (const model of connectedModels) {
+    if (!model.enabled) continue
+
+    // Create a canonical model ID: provider/model-id
+    const canonicalId = `ext/${model.providerId}/${model.id}`
+
+    const tierLabel = model.tier.charAt(0).toUpperCase() + model.tier.slice(1)
+    const contextLabel = model.contextWindow
+      ? ` · ${(model.contextWindow / 1000).toFixed(0)}K ctx`
+      : ''
+
+    options.push({
+      value: canonicalId as ModelSetting,
+      label: `${model.name}`,
+      description: `${model.providerName} · ${tierLabel}${contextLabel}`,
+      descriptionForModel: `${model.name} (${model.providerName}) — ${tierLabel} tier${contextLabel}`,
+    })
+  }
+
+  return options
+}
+
 export function getModelOptions(fastMode = false): ModelOption[] {
   const options = getModelOptionsBase(fastMode)
+
+  // Add external provider models
+  const externalOptions = getExternalProviderModelOptions()
+  if (externalOptions.length > 0) {
+    // Add a separator
+    options.push({
+      value: '__external_separator__' as ModelSetting,
+      label: '─────────────────────',
+      description: 'External providers',
+    })
+    for (const opt of externalOptions) {
+      if (!options.some(existing => existing.value === opt.value)) {
+        options.push(opt)
+      }
+    }
+  }
 
   // Add the custom model from the ANTHROPIC_CUSTOM_MODEL_OPTION env var
   const envCustomModel = process.env.ANTHROPIC_CUSTOM_MODEL_OPTION
