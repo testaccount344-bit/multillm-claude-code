@@ -479,9 +479,6 @@ function KeyEntryFlow({
           const envVars: Record<string, string> = {
             [authOption.oauth!.tokenEnvVar]: token,
           }
-          if (authOption.oauth!.apiKeyEnvVar) {
-            envVars[authOption.oauth!.apiKeyEnvVar] = token
-          }
           onComplete(envVars, undefined)
         }}
         onCancel={onCancel}
@@ -636,6 +633,10 @@ function ConnectCommand({
         currentEnv['ANTHROPIC_BASE_URL'] = baseUrl
       }
 
+      if (selectedAuthOption?.oauth?.tokenEnvVar === 'OPENAI_CODEX_ACCESS_TOKEN') {
+        delete currentEnv['OPENAI_API_KEY']
+      }
+
       saveGlobalConfig(prev => ({
         ...prev,
         env: currentEnv,
@@ -651,13 +652,26 @@ function ConnectCommand({
       // Try to fetch models
       const apiKey = envVars[selectedAuthOption?.envVars?.[0]?.name || '']
         || envVars[selectedProvider.envVars?.[0]?.name || '']
+        || envVars[selectedAuthOption?.oauth?.tokenEnvVar || '']
         || envVars['OPENAI_API_KEY']
         || envVars['ANTHROPIC_API_KEY']
         || envVars['OPENROUTER_API_KEY']
         || envVars['GROQ_API_KEY']
         || envVars['DEEPSEEK_API_KEY']
 
-      if (selectedProvider.modelsApi && apiKey) {
+      if (selectedAuthOption?.oauth?.tokenEnvVar === 'OPENAI_CODEX_ACCESS_TOKEN') {
+        setAvailableModels([
+          { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', providerId: 'openai-codex' },
+          { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex', providerId: 'openai-codex' },
+          { id: 'gpt-5.2-codex-pro', name: 'GPT-5.2 Codex Pro', providerId: 'openai-codex' },
+          { id: 'gpt-5.2-codex-instant', name: 'GPT-5.2 Codex Instant', providerId: 'openai-codex' },
+          { id: 'gpt-5.2-codex-thinking', name: 'GPT-5.2 Codex Thinking', providerId: 'openai-codex' },
+          { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Codex Max', providerId: 'openai-codex' },
+          { id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex', providerId: 'openai-codex' },
+          { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Codex Mini', providerId: 'openai-codex' },
+        ])
+        setPhase('pick-model')
+      } else if (selectedProvider.modelsApi && apiKey) {
         setLoadingModels(true)
         fetchModels(selectedProvider, apiKey, baseUrl)
           .then((models) => {

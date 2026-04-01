@@ -199,14 +199,21 @@ export function createCodexFetch(originalFetch: typeof fetch): typeof fetch {
       return originalFetch(input, init || {})
     }
 
-    // Rewrite URL
-    const codexUrl = `${CODEX_BASE_URL}${CODEX_RESPONSES_PATH}`
-
     // Transform request body
     let transformedBody = init?.body
+    let shouldRouteToCodex = false
     if (init?.body) {
       try {
         const body = JSON.parse(init.body as string)
+
+        const selectedModel = typeof body.model === 'string' ? body.model : ''
+        shouldRouteToCodex =
+          selectedModel.startsWith('ext/openai-codex/') ||
+          selectedModel.includes('codex')
+
+        if (!shouldRouteToCodex) {
+          return originalFetch(input, init || {})
+        }
 
         // Map model names from external provider format
         // ext/openai-codex/gpt-5.2-codex -> gpt-5.2-codex
@@ -224,6 +231,13 @@ export function createCodexFetch(originalFetch: typeof fetch): typeof fetch {
         // Pass through if we can't parse
       }
     }
+
+    if (!shouldRouteToCodex) {
+      return originalFetch(input, init || {})
+    }
+
+    // Rewrite URL
+    const codexUrl = `${CODEX_BASE_URL}${CODEX_RESPONSES_PATH}`
 
     // Create Codex headers
     const existingHeaders = init?.headers || {}

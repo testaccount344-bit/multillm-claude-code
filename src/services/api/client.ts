@@ -305,12 +305,9 @@ export async function getAnthropicClient({
 
   // Determine authentication method based on available tokens
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-    // When Codex OAuth is connected, use a dummy API key (auth is via fetch override)
-    apiKey: isCodexConnected()
-      ? 'codex-oauth-dummy'
-      : isClaudeAISubscriber()
-        ? null
-        : apiKey || getAnthropicApiKey(),
+    apiKey: isClaudeAISubscriber()
+      ? null
+      : apiKey || getAnthropicApiKey() || undefined,
     authToken: isClaudeAISubscriber()
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,

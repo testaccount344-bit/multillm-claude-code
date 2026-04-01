@@ -121,7 +121,6 @@ export const PROVIDERS: ProviderConfig[] = [
           redirectUri: 'http://localhost:1455/auth/callback',
           scopes: ['openid', 'profile', 'email', 'offline_access'],
           tokenEnvVar: 'OPENAI_CODEX_ACCESS_TOKEN',
-          apiKeyEnvVar: 'OPENAI_API_KEY',
         },
       },
     ],

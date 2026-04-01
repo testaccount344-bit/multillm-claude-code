@@ -284,6 +284,8 @@ export function getConnectedModels(): UnifiedModel[] {
   const config = getGlobalConfig()
   const env = config.env || {}
   const disabledModels = config.disabledModels || []
+  const codexToken = env['OPENAI_CODEX_ACCESS_TOKEN']
+  const openAiKey = env['OPENAI_API_KEY']
 
   // Find which providers are connected
   const connectedProviderIds = new Set<string>()
@@ -291,6 +293,14 @@ export function getConnectedModels(): UnifiedModel[] {
   for (const provider of PROVIDERS) {
     // Check direct env vars
     if (provider.envVars?.[0]?.name && env[provider.envVars[0].name]) {
+      if (
+        provider.id === 'openai' &&
+        codexToken &&
+        openAiKey &&
+        codexToken === openAiKey
+      ) {
+        continue
+      }
       connectedProviderIds.add(provider.id)
       continue
     }
