@@ -131,7 +131,6 @@ export { getCommandName, isCommandEnabled } from './types/command.js'
 export const INTERNAL_ONLY_COMMANDS = [
   backfillSessions,
   breakCache,
-  bughunter,
   commit,
   commitPushPr,
   ctx_viz,
