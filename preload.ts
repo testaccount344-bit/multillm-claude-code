@@ -5,6 +5,8 @@ const buildTime = process.env.CLAUDE_CODE_LOCAL_BUILD_TIME ?? new Date().toISOSt
 process.env.CLAUDE_CODE_LOCAL_SKIP_REMOTE_PREFETCH ??= '1';
 
 Object.assign(globalThis, {
+  // bun:bundle compiler builtin shim — always returns false (features disabled)
+  feature: () => false,
   MACRO: {
     VERSION: version,
     PACKAGE_URL: packageUrl,
