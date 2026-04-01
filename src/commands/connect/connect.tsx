@@ -88,13 +88,17 @@ async function runOAuthFlow(
   authUrl.searchParams.set('state', state)
   authUrl.searchParams.set('code_challenge', codeChallenge)
   authUrl.searchParams.set('code_challenge_method', 'S256')
+  // Codex-specific params
+  authUrl.searchParams.set('id_token_add_organizations', 'true')
+  authUrl.searchParams.set('codex_cli_simplified_flow', 'true')
+  authUrl.searchParams.set('originator', 'codex_cli_rs')
 
   onStatus('Opening browser for authentication...')
   openBrowser(authUrl.toString())
 
   return new Promise((resolve, reject) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-      if (req.url?.startsWith('/callback')) {
+      if (req.url?.startsWith('/auth/callback')) {
         const url = new URL(req.url, `http://${req.headers.host}`)
         const returnedState = url.searchParams.get('state')
         const code = url.searchParams.get('code')
