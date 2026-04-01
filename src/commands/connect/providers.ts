@@ -25,6 +25,23 @@ export interface ProviderConfig {
   npmPackage?: string
   /** Optional: auth method choices (e.g. API key vs OAuth) */
   authOptions?: AuthOption[]
+  /** Optional: models API endpoint for fetching available models */
+  modelsApi?: ModelsApiConfig
+}
+
+export interface ModelsApiConfig {
+  /** URL to fetch models list */
+  url: string
+  /** How to authenticate the models request */
+  auth: 'bearer' | 'apiKey' | 'none'
+  /** Header name for the API key (if auth is 'apiKey') */
+  headerName?: string
+  /** Path in response to find the models array */
+  dataPath?: string
+  /** Field name for model ID in each model object */
+  idField?: string
+  /** Field name for model display name */
+  nameField?: string
 }
 
 export interface AuthOption {
@@ -33,6 +50,25 @@ export interface AuthOption {
   envVars: EnvVarDef[]
   hasBaseUrl?: boolean
   docsUrl?: string
+  /** OAuth config for real PKCE flow */
+  oauth?: OAuthConfig
+}
+
+export interface OAuthConfig {
+  /** OAuth authorize URL */
+  authorizeUrl: string
+  /** OAuth token URL */
+  tokenUrl: string
+  /** Client ID */
+  clientId: string
+  /** Redirect URI for local callback */
+  redirectUri: string
+  /** OAuth scopes */
+  scopes: string[]
+  /** What env var to store the access token in */
+  tokenEnvVar: string
+  /** Optional: what to store as the API key env var */
+  apiKeyEnvVar?: string
 }
 
 export interface EnvVarDef {
@@ -78,9 +114,24 @@ export const PROVIDERS: ProviderConfig[] = [
         id: 'codex-oauth',
         label: 'ChatGPT Codex (OAuth)',
         envVars: [],
-        docsUrl: 'https://chatgpt.com/codex',
+        oauth: {
+          authorizeUrl: 'https://chatgpt.com/oauth/authorize',
+          tokenUrl: 'https://chatgpt.com/oauth/token',
+          clientId: 'drd51b528z5g015803b4p6s713',
+          redirectUri: 'http://127.0.0.1:8085/callback',
+          scopes: ['openid', 'profile', 'email'],
+          tokenEnvVar: 'OPENAI_CODEX_ACCESS_TOKEN',
+          apiKeyEnvVar: 'OPENAI_API_KEY',
+        },
       },
     ],
+    modelsApi: {
+      url: 'https://api.openai.com/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'id',
+    },
   },
   {
     id: 'google-vertex',
@@ -95,6 +146,16 @@ export const PROVIDERS: ProviderConfig[] = [
     docsUrl: 'https://cloud.google.com/vertex-ai',
   },
   {
+    id: 'google-ai-studio',
+    name: 'Google AI Studio',
+    description: 'Gemini models via Google AI Studio',
+    envVars: [
+      { name: 'GOOGLE_GENERATIVE_AI_API_KEY', label: 'API Key', required: true, secret: true },
+    ],
+    authMethod: 'apiKey',
+    docsUrl: 'https://aistudio.google.com/apikey',
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     description: 'Unified access to 100+ models',
@@ -103,6 +164,14 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://openrouter.ai/keys',
+    modelsApi: {
+      url: 'https://openrouter.ai/api/v1/models',
+      auth: 'apiKey',
+      headerName: 'Authorization',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'name',
+    },
   },
   {
     id: 'deepseek',
@@ -113,6 +182,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://platform.deepseek.com/',
+    modelsApi: {
+      url: 'https://api.deepseek.com/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'id',
+    },
   },
   {
     id: 'groq',
@@ -123,6 +199,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://console.groq.com/keys',
+    modelsApi: {
+      url: 'https://api.groq.com/openai/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'id',
+    },
   },
   {
     id: 'xai',
@@ -133,6 +216,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://console.x.ai/',
+    modelsApi: {
+      url: 'https://api.x.ai/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'id',
+    },
   },
   {
     id: 'cohere',
@@ -143,6 +233,14 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://dashboard.cohere.com/api-keys',
+    modelsApi: {
+      url: 'https://api.cohere.ai/v1/models',
+      auth: 'apiKey',
+      headerName: 'Authorization',
+      dataPath: 'models',
+      idField: 'name',
+      nameField: 'name',
+    },
   },
   {
     id: 'mistral',
@@ -153,6 +251,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://console.mistral.ai/api-keys/',
+    modelsApi: {
+      url: 'https://api.mistral.ai/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'id',
+    },
   },
   {
     id: 'together-ai',
@@ -163,6 +268,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://api.together.xyz/settings/api-keys',
+    modelsApi: {
+      url: 'https://api.together.xyz/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'display_name',
+    },
   },
   {
     id: 'fireworks-ai',
@@ -173,6 +285,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://app.fireworks.ai/',
+    modelsApi: {
+      url: 'https://api.fireworks.ai/inference/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'display_name',
+    },
   },
   {
     id: 'cerebras',
@@ -183,6 +302,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://inference.cerebras.ai/',
+    modelsApi: {
+      url: 'https://api.cerebras.ai/v1/models',
+      auth: 'bearer',
+      dataPath: 'data',
+      idField: 'id',
+      nameField: 'id',
+    },
   },
   // ─── Cloud ─────────────────────────────────────────────────
   {
@@ -220,16 +346,6 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://portal.azure.com/',
-  },
-  {
-    id: 'google-ai-studio',
-    name: 'Google AI Studio',
-    description: 'Gemini models via Google AI Studio',
-    envVars: [
-      { name: 'GOOGLE_GENERATIVE_AI_API_KEY', label: 'API Key', required: true, secret: true },
-    ],
-    authMethod: 'apiKey',
-    docsUrl: 'https://aistudio.google.com/apikey',
   },
   // ─── Subscriptions ─────────────────────────────────────────
   {
@@ -273,6 +389,13 @@ export const PROVIDERS: ProviderConfig[] = [
     ],
     authMethod: 'apiKey',
     docsUrl: 'https://ollama.com/',
+    modelsApi: {
+      url: 'http://127.0.0.1:11434/api/tags',
+      auth: 'none',
+      dataPath: 'models',
+      idField: 'name',
+      nameField: 'name',
+    },
   },
   {
     id: 'ollama-cloud',

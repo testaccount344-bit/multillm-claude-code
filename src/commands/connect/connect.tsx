@@ -1,6 +1,7 @@
 import * as React from 'react'
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { execSync } from 'child_process'
+import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import chalk from 'chalk'
 import TextInput from '../../components/TextInput.js'
 import { FuzzyPicker } from '../../components/design-system/FuzzyPicker.js'
@@ -14,12 +15,213 @@ import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import {
   PROVIDERS,
   searchProviders,
+  getProviderById,
   type ProviderConfig,
   type EnvVarDef,
   type AuthOption,
+  type OAuthConfig,
+  type ModelsApiConfig,
 } from './providers.js'
 
 type ResolvedField = EnvVarDef & { isBaseUrl?: boolean }
+type ConnectPhase = 'pick-provider' | 'pick-auth' | 'enter-keys' | 'oauth' | 'pick-model' | 'done'
+
+interface ConnectedState {
+  provider: ProviderConfig
+  authOption: AuthOption | null
+  envVars: Record<string, string>
+  baseUrl?: string
+}
+
+// ─── OAuth PKCE helpers ──────────────────────────────────────
+
+function generateRandomString(length: number): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+  let result = ''
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  return result
+}
+
+async function sha256(input: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(input)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+}
+
+function openBrowser(url: string): void {
+  try {
+    if (process.platform === 'win32') {
+      execSync(`start "" "${url}"`, { stdio: 'ignore' })
+    } else if (process.platform === 'darwin') {
+      execSync(`open "${url}"`, { stdio: 'ignore' })
+    } else {
+      execSync(`xdg-open "${url}" 2>/dev/null || open "${url}" 2>/dev/null`, { stdio: 'ignore' })
+    }
+  } catch {
+    // Browser open failed — user can still navigate manually
+  }
+}
+
+/**
+ * Run a full OAuth 2.0 PKCE flow.
+ * Returns the access token.
+ */
+async function runOAuthFlow(
+  config: OAuthConfig,
+  onStatus: (msg: string) => void,
+): Promise<string> {
+  const codeVerifier = generateRandomString(128)
+  const codeChallenge = await sha256(codeVerifier)
+  const state = generateRandomString(32)
+
+  const authUrl = new URL(config.authorizeUrl)
+  authUrl.searchParams.set('client_id', config.clientId)
+  authUrl.searchParams.set('redirect_uri', config.redirectUri)
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('scope', config.scopes.join(' '))
+  authUrl.searchParams.set('state', state)
+  authUrl.searchParams.set('code_challenge', codeChallenge)
+  authUrl.searchParams.set('code_challenge_method', 'S256')
+
+  onStatus('Opening browser for authentication...')
+  openBrowser(authUrl.toString())
+
+  return new Promise((resolve, reject) => {
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      if (req.url?.startsWith('/callback')) {
+        const url = new URL(req.url, `http://${req.headers.host}`)
+        const returnedState = url.searchParams.get('state')
+        const code = url.searchParams.get('code')
+
+        if (returnedState !== state) {
+          res.writeHead(400, { 'Content-Type': 'text/html' })
+          res.end('<h1>Authentication failed: state mismatch</h1>')
+          server.close()
+          reject(new Error('OAuth state mismatch'))
+          return
+        }
+
+        if (!code) {
+          res.writeHead(400, { 'Content-Type': 'text/html' })
+          res.end('<h1>Authentication failed: no code returned</h1>')
+          server.close()
+          reject(new Error('No authorization code returned'))
+          return
+        }
+
+        // Exchange code for tokens
+        onStatus('Exchanging authorization code for tokens...')
+        const tokenParams = new URLSearchParams()
+        tokenParams.set('grant_type', 'authorization_code')
+        tokenParams.set('code', code)
+        tokenParams.set('redirect_uri', config.redirectUri)
+        tokenParams.set('client_id', config.clientId)
+        tokenParams.set('code_verifier', codeVerifier)
+
+        fetch(config.tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: tokenParams.toString(),
+        })
+          .then(async (r) => {
+            if (!r.ok) {
+              const text = await r.text()
+              throw new Error(`Token exchange failed (${r.status}): ${text}`)
+            }
+            return r.json()
+          })
+          .then((data) => {
+            const accessToken = data.access_token
+            if (!accessToken) throw new Error('No access_token in response')
+
+            res.writeHead(200, { 'Content-Type': 'text/html' })
+            res.end(`
+              <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+                <h2>Authentication Complete!</h2>
+                <p>You can close this tab and return to the terminal.</p>
+              </body></html>
+            `)
+            server.close()
+            resolve(accessToken)
+          })
+          .catch((err) => {
+            res.writeHead(500, { 'Content-Type': 'text/html' })
+            res.end(`<h1>Token exchange failed</h1><p>${err.message}</p>`)
+            server.close()
+            reject(err)
+          })
+      } else {
+        res.writeHead(404)
+        res.end('Not found')
+      }
+    })
+
+    const port = parseInt(new URL(config.redirectUri).port, 10)
+    server.listen(port, '127.0.0.1', () => {
+      onStatus(`Waiting for authorization callback on port ${port}...`)
+    })
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        reject(new Error(`Port ${port} is already in use. Close any other app using it and try again.`))
+      } else {
+        reject(err)
+      }
+    })
+  })
+}
+
+// ─── Models fetching ─────────────────────────────────────────
+
+interface ModelEntry {
+  id: string
+  name: string
+  providerId: string
+}
+
+async function fetchModels(
+  provider: ProviderConfig,
+  apiKey: string,
+  baseUrl?: string,
+): Promise<ModelEntry[]> {
+  const api = provider.modelsApi
+  if (!api) return []
+
+  const url = baseUrl && api.auth !== 'none'
+    ? api.url.replace(/https?:\/\/[^/]+/, baseUrl.replace(/\/$/, ''))
+    : api.url
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (api.auth === 'bearer') {
+    headers['Authorization'] = `Bearer ${apiKey}`
+  } else if (api.auth === 'apiKey') {
+    headers[api.headerName || 'Authorization'] = `Bearer ${apiKey}`
+  }
+
+  const resp = await fetch(url, { headers })
+  if (!resp.ok) return []
+
+  const data = await resp.json()
+  const items = api.dataPath
+    ? data[api.dataPath]
+    : Array.isArray(data) ? data : []
+
+  if (!Array.isArray(items)) return []
+
+  return items.map((m: Record<string, string>) => ({
+    id: m[api.idField || 'id'] || m.id || m.name || 'unknown',
+    name: m[api.nameField || 'name'] || m[api.idField || 'id'] || m.id || 'unknown',
+    providerId: provider.id,
+  }))
+}
+
+// ─── UI Components ───────────────────────────────────────────
 
 /**
  * Key entry step: renders a single env var field with TextInput.
@@ -47,7 +249,6 @@ function KeyEntryStep({
 }) {
   const [cursorOffset, setCursorOffset] = useState(0)
   const terminalSize = useTerminalSize()
-  const [theme] = useTheme()
 
   const bindings = useMemo(
     () => ({
@@ -94,7 +295,6 @@ function KeyEntryStep({
 
 /**
  * Auth method picker — shown when a provider has multiple auth options
- * (e.g. OpenAI: API Key vs ChatGPT Codex OAuth).
  */
 function AuthMethodPicker({
   provider,
@@ -125,44 +325,35 @@ function AuthMethodPicker({
 }
 
 /**
- * OAuth flow: opens browser, waits for user to paste the auth code.
+ * OAuth flow with real PKCE.
  */
 function OAuthFlow({
   providerName,
-  authUrl,
+  oauthConfig,
   onComplete,
   onCancel,
 }: {
   providerName: string
-  authUrl: string
-  onComplete: (code: string) => void
+  oauthConfig: OAuthConfig
+  onComplete: (accessToken: string) => void
   onCancel: () => void
 }) {
-  const [cursorOffset, setCursorOffset] = useState(0)
-  const [code, setCode] = useState('')
-  const terminalSize = useTerminalSize()
+  const [status, setStatus] = useState('Starting OAuth...')
+  const [error, setError] = useState<string | null>(null)
 
-  // Open browser on mount
   useEffect(() => {
-    try {
-      if (process.platform === 'win32') {
-        execSync(`start "" "${authUrl}"`)
-      } else if (process.platform === 'darwin') {
-        execSync(`open "${authUrl}"`)
-      } else {
-        execSync(`xdg-open "${authUrl}" 2>/dev/null || open "${authUrl}" 2>/dev/null`)
-      }
-    } catch {
-      // Browser open failed — user can still navigate manually
-    }
-  }, [authUrl])
-
-  const bindings = useMemo(
-    () => ({ 'confirm:yes': () => { if (code.trim()) onComplete(code.trim()) } }),
-    [code, onComplete],
-  )
-
-  useKeybindings(bindings, { context: 'Confirmation', isActive: !!code.trim() })
+    let cancelled = false
+    runOAuthFlow(oauthConfig, (msg) => {
+      if (!cancelled) setStatus(msg)
+    })
+      .then((token) => {
+        if (!cancelled) onComplete(token)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || String(err))
+      })
+    return () => { cancelled = true }
+  }, [oauthConfig])
 
   return (
     <Dialog
@@ -172,29 +363,69 @@ function OAuthFlow({
       isCancelActive={true}
     >
       <Box flexDirection="column" gap={1} paddingX={1}>
-        <Text dimColor>Opening your browser for authentication...</Text>
-        <Box>
-          <Text color="permission">{'>'} </Text>
-          <Text color="permission">{authUrl}</Text>
-        </Box>
-        <Text dimColor>Enter the authorization code shown:</Text>
-        <TextInput
-          value={code}
-          onChange={setCode}
-          onSubmit={() => { if (code.trim()) onComplete(code.trim()) }}
-          focus={true}
-          placeholder="Paste the code from your browser"
-          columns={terminalSize.columns}
-          cursorOffset={cursorOffset}
-          onChangeCursorOffset={setCursorOffset}
-          showCursor={true}
-        />
-        <Box flexDirection="row" gap={2}>
-          <Text dimColor>Enter to confirm</Text>
-          <Text dimColor>Ctrl+C to cancel</Text>
-        </Box>
+        {error ? (
+          <>
+            <Text color="error">OAuth failed:</Text>
+            <Text>{error}</Text>
+            <Text dimColor>Press Esc to cancel</Text>
+          </>
+        ) : (
+          <>
+            <Text bold color="permission">{status}</Text>
+            <Text dimColor>
+              If your browser didn't open, navigate to:
+            </Text>
+            <Text color="permission">{oauthConfig.authorizeUrl}</Text>
+            <Text dimColor>Ctrl+C to cancel</Text>
+          </>
+        )}
       </Box>
     </Dialog>
+  )
+}
+
+/**
+ * Model picker — shown after connecting to let user pick a model.
+ */
+function ModelPicker({
+  models,
+  providerName,
+  onSelect,
+  onCancel,
+  onSkip,
+}: {
+  models: ModelEntry[]
+  providerName: string
+  onSelect: (model: ModelEntry) => void
+  onCancel: () => void
+  onSkip: () => void
+}) {
+  return (
+    <FuzzyPicker
+      title={`Select a model for ${providerName}`}
+      placeholder="Search models..."
+      items={models}
+      getKey={item => item.id}
+      renderItem={(item, isFocused) => (
+        <Text bold={isFocused}>{item.name}</Text>
+      )}
+      visibleCount={12}
+      onQueryChange={() => {}}
+      onSelect={onSelect}
+      onCancel={onCancel}
+      emptyMessage="No models found"
+      matchLabel={`${models.length} model${models.length !== 1 ? 's' : ''}`}
+      selectAction="select"
+      extraHints={
+        <Box flexDirection="row" gap={1}>
+          <Text dimColor>Esc to skip</Text>
+        </Box>
+      }
+      onShiftTab={{
+        action: 'skip',
+        handler: onSkip,
+      }}
+    />
   )
 }
 
@@ -215,7 +446,6 @@ function KeyEntryFlow({
   const [fieldIndex, setFieldIndex] = useState(0)
   const [values, setValues] = useState<Record<string, string>>({})
   const [baseUrl, setBaseUrl] = useState<string | undefined>()
-  const [oauthCode, setOauthCode] = useState<string | null>(null)
 
   // Build ordered list of fields from the chosen auth option (or provider default)
   const fields = useMemo(() => {
@@ -235,17 +465,21 @@ function KeyEntryFlow({
     return list
   }, [provider, authOption])
 
-  // OAuth flow: no env vars, has a docsUrl — open browser instead
-  if (authOption && fields.length === 0 && authOption.docsUrl) {
-    if (oauthCode) {
-      onComplete({ OPENAI_CODEX_OAUTH: oauthCode }, undefined)
-      return null
-    }
+  // OAuth flow: auth option has oauth config
+  if (authOption?.oauth) {
     return (
       <OAuthFlow
         providerName={provider.name}
-        authUrl={authOption.docsUrl}
-        onComplete={(code) => setOauthCode(code)}
+        oauthConfig={authOption.oauth}
+        onComplete={(token) => {
+          const envVars: Record<string, string> = {
+            [authOption.oauth!.tokenEnvVar]: token,
+          }
+          if (authOption.oauth!.apiKeyEnvVar) {
+            envVars[authOption.oauth!.apiKeyEnvVar] = token
+          }
+          onComplete(envVars, undefined)
+        }}
         onCancel={onCancel}
       />
     )
@@ -359,21 +593,26 @@ function ConnectCommand({
 }: {
   onDone: LocalJSXCommandOnDone
 }) {
+  const [phase, setPhase] = useState<ConnectPhase>('pick-provider')
   const [selectedProvider, setSelectedProvider] = useState<ProviderConfig | null>(null)
   const [selectedAuthOption, setSelectedAuthOption] = useState<AuthOption | null>(null)
+  const [connectedState, setConnectedState] = useState<ConnectedState | null>(null)
+  const [availableModels, setAvailableModels] = useState<ModelEntry[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
 
   const handleProviderSelect = useCallback((provider: ProviderConfig) => {
     setSelectedProvider(provider)
-    // If provider has authOptions, show auth method picker first
     if (provider.authOptions && provider.authOptions.length > 0) {
-      return
+      setPhase('pick-auth')
+    } else {
+      setSelectedAuthOption(null)
+      setPhase('enter-keys')
     }
-    // Otherwise go straight to key entry
-    setSelectedAuthOption(null)
   }, [])
 
   const handleAuthOptionSelect = useCallback((option: AuthOption) => {
     setSelectedAuthOption(option)
+    setPhase('enter-keys')
   }, [])
 
   const handleKeysComplete = useCallback(
@@ -398,33 +637,80 @@ function ConnectCommand({
         env: currentEnv,
       }))
 
+      setConnectedState({
+        provider: selectedProvider,
+        authOption: selectedAuthOption,
+        envVars,
+        baseUrl,
+      })
+
+      // Try to fetch models
+      const apiKey = envVars[selectedAuthOption?.envVars?.[0]?.name || '']
+        || envVars[selectedProvider.envVars?.[0]?.name || '']
+        || envVars['OPENAI_API_KEY']
+        || envVars['ANTHROPIC_API_KEY']
+        || envVars['OPENROUTER_API_KEY']
+        || envVars['GROQ_API_KEY']
+        || envVars['DEEPSEEK_API_KEY']
+
+      if (selectedProvider.modelsApi && apiKey) {
+        setLoadingModels(true)
+        fetchModels(selectedProvider, apiKey, baseUrl)
+          .then((models) => {
+            if (models.length > 0) {
+              setAvailableModels(models)
+              setPhase('pick-model')
+            } else {
+              onDone(
+                `Connected to ${chalk.bold(selectedProvider.name)}. Restart session for changes to take effect.`,
+                { display: 'system' as CommandResultDisplay },
+              )
+            }
+          })
+          .catch(() => {
+            onDone(
+              `Connected to ${chalk.bold(selectedProvider.name)}. Restart session for changes to take effect.`,
+              { display: 'system' as CommandResultDisplay },
+            )
+          })
+          .finally(() => setLoadingModels(false))
+      } else {
+        onDone(
+          `Connected to ${chalk.bold(selectedProvider.name)}. Restart session for changes to take effect.`,
+          { display: 'system' as CommandResultDisplay },
+        )
+      }
+    },
+    [selectedProvider, selectedAuthOption, onDone],
+  )
+
+  const handleModelSelect = useCallback(
+    (model: ModelEntry) => {
+      if (!connectedState) return
+      const config = getGlobalConfig()
+      saveGlobalConfig(prev => ({
+        ...prev,
+        model: model.id,
+      }))
       onDone(
-        `Connected to ${chalk.bold(selectedProvider.name)}. Restart session for changes to take effect.`,
+        `Connected to ${chalk.bold(connectedState.provider.name)} with model ${chalk.bold(model.name)}. Restart session for changes to take effect.`,
         { display: 'system' as CommandResultDisplay },
       )
     },
-    [selectedProvider, onDone],
+    [connectedState, onDone],
   )
 
   const handleCancel = useCallback(() => {
     onDone('Connect cancelled')
   }, [onDone])
 
-  const handleBack = useCallback(() => {
-    if (selectedAuthOption) {
-      setSelectedAuthOption(null)
-    } else if (selectedProvider) {
-      setSelectedProvider(null)
-    }
-  }, [selectedProvider, selectedAuthOption])
-
   // Phase 1: pick provider
-  if (!selectedProvider) {
+  if (phase === 'pick-provider') {
     return <ConnectPicker onSelect={handleProviderSelect} onCancel={handleCancel} />
   }
 
-  // Phase 1b: pick auth method (if provider has multiple options)
-  if (selectedProvider.authOptions && selectedProvider.authOptions.length > 0 && !selectedAuthOption) {
+  // Phase 1b: pick auth method
+  if (phase === 'pick-auth' && selectedProvider) {
     return (
       <AuthMethodPicker
         provider={selectedProvider}
@@ -434,15 +720,37 @@ function ConnectCommand({
     )
   }
 
-  // Phase 2: enter API keys
-  return (
-    <KeyEntryFlow
-      provider={selectedProvider}
-      authOption={selectedAuthOption}
-      onComplete={handleKeysComplete}
-      onCancel={handleCancel}
-    />
-  )
+  // Phase 2: enter API keys / OAuth
+  if (phase === 'enter-keys' && selectedProvider) {
+    return (
+      <KeyEntryFlow
+        provider={selectedProvider}
+        authOption={selectedAuthOption}
+        onComplete={handleKeysComplete}
+        onCancel={handleCancel}
+      />
+    )
+  }
+
+  // Phase 3: pick model
+  if (phase === 'pick-model' && connectedState) {
+    return (
+      <ModelPicker
+        models={availableModels}
+        providerName={connectedState.provider.name}
+        onSelect={handleModelSelect}
+        onCancel={handleCancel}
+        onSkip={() => {
+          onDone(
+            `Connected to ${chalk.bold(connectedState.provider.name)}. Restart session for changes to take effect.`,
+            { display: 'system' as CommandResultDisplay },
+          )
+        }}
+      />
+    )
+  }
+
+  return null
 }
 
 export const call = async (
