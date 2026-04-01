@@ -336,7 +336,11 @@ const reconciler = createReconciler<
     internalHandle?: unknown,
   ): DOMElement {
     if (hostContext.isInsideText && originalType === 'ink-box') {
-      throw new Error(`<Box> can't be nested inside <Text> component`)
+      // Convert nested Box inside Text to virtual text to avoid crash
+      const type = 'ink-virtual-text'
+      const node = createNode(type)
+      if (COMMIT_LOG) _createCount++
+      return node
     }
 
     const type =
